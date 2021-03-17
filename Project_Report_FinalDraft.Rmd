@@ -1,0 +1,535 @@
+---
+title: "ST661 Project - COVID-19 Cases by County"
+author: "Group 3: Abhishek Kumar Pandey, Patrick Michael Gorry, Aaron John Doyle, Chenlin Liu"
+date: "10/12/2020"
+output: html_document
+code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Instructions {.tabset}
+
+This project is focused an the performing of data analysis on a dataset of COVID-19 cases in Ireland grouped by county. 
+
+
+### Synopsis
+
+#### Areas of Responsibility
+
+* **Abhishek** had responsibility for the material and visualisations in the *Cumulative Cases* section of the *Data Analytics* portion of this project. He also had primary responsibility of the *Data Import* section well as general formatting of the final report.
+* **Patrick** had responsibility for the material and visualisations in the *Daily Increases* and *Proportional Cases* sections, in particular for the latter - the choropleth map and embedded shiny app, as well as general formatting.
+* **Aaron** also had responsibility for material and visualisations covered in *Cumulative Cases*, with a focus on the breakdown by province of total cases.
+* **Chenlin** also had responsibility for the material and visualisations covered in *Proportional Cases*, with a focus on the breakdown of cases by county and province.
+
+#### Objective:
+The objective of this project is to examine the Covid19CountyStatisticsHPSCIreland dataset. The aim will be to perform data analysis on the data given and answer a number of questions such as which counties had the highest/lowest total cases, which county had the largest proportional rate of infection and which counties responded best to lockdown/easing of restrictions, among others. 
+
+#### Method:
+The dataset was imported, cleaned, and explored in order to answer the above questions. Various metrics were examined and a variety of graphical and analytical methods were employed in order to provide insight into the data.
+
+#### Results:
+
+* The highest daily increase of COVID-19 cases for the entire country was **1,283** on **October 17th, 2020**
+* In terms of raw case numbers, *Dublin* was the worst effected with a total number of confirmed cases of COVID-19 being **27,666**.
+* Dublin also had the largest single day increase in cases, of **513** on the **22nd of April, 2020**
+* We can graphically see the effect of the lockdown of the country and the various restrictions that were implemented, there is a clear dip/stall in case numbers/proportions during the summer, with the period of **June to July** being the point where the increase in cases was closest to being zero.
+* We can see a clear *trend downwards* in terms of new cases, mainly due to the Level 5 restrictions which were implemented in *October* and lifted at the start of *December*.
+* Given the trends seen with the previous restrictions/lockdown, we can likely expect another spike in cases in the new year.
+
+
+### Packages Used
+
+The following are all of the external packages used in our analysis.
+
+```{r packages, results = 'hide', message=FALSE, warning=FALSE}
+library(tidyr)
+library(dplyr)
+library(tidyverse)
+library(cowplot)
+library(GADMTools)
+library(tmap)
+library(gifski)
+library(sf)
+library(ggplot2)
+library(gganimate)
+library(sp)
+library(flexdashboard)
+library(highcharter)
+library(gganimate)
+library(tibble)
+library(stringr)
+library(gridExtra)
+library(shiny)
+library(magick)
+```
+
+
+
+### Data Preparation {.tabset}
+Both protocols followed in making the data analysis ready are included in this section. Every move was clarified and the codes were given.
+
+#### Data Import
+
+The data was sourced from here: https://opendata-geohive.hub.arcgis.com/datasets/d9be85b30d7748b5b7c09450b8aede63_0. This dataset provides day-by-day updates to the total cumulative COVID-19 cases in each county.
+
+Firstly, we must import the dataset in question to be analyzed. Our data source has provided the dataset in both .csv and .shp (shape file) formats, with the latter being more suited to more geographical visualizations thanks to the geometry features present in that file. The data is imported from the original .csv file and stored as a dataframe, while the shape file is imported using the sf library.
+
+```{r importing, results = 'hide', message=FALSE}
+directory <- getwd()
+
+
+url <- "http://opendata-geohive.hub.arcgis.com/datasets/d9be85b30d7748b5b7c09450b8aede63_0.csv"
+cases <- read.csv(url)
+
+ire <- st_read("CovidCountyStatisticsHPSCIreland.shp")
+
+```
+
+```{r}
+colnames(cases)
+```
+
+```{r}
+dim(cases)
+```
+
+```{r}
+str(cases)
+
+str(ire)
+```
+
+#### Data Cleaning
+
+After importing the dataset, we can see that there are two columns named **ConfirmedCovidDeaths** and **ConfirmedCovidRecovered** which contains no data, can be dropped from the data frame.
+Also, the first column in the dataset i.e; **OBJECTID** is irrelevant and can be dropped.
+
+```{r}
+corona <- subset(cases, select = -c(1,13,14))
+colnames(corona)
+corona$TimeStamp= as.Date(corona$TimeStamp)
+```
+
+Also, there are NA values in the column **PopulationProportionCovidCases**. Total 546 rows in the column **PopulationProportionCovidCases** has been replaced with '0', the same is done for the shape file.
+
+```{r}
+corona[is.na(corona)] =0
+ire[is.na(ire)] =0
+```
+
+A key aspect of the pandemic in Ireland has been the idea of monitoring, and attempting to flatten, the curve of cases in the country. Since our dataset only contains the cumulative cases, that is - the cases up until and including that date, we must perform some slight manipulation using **dplyr**. We want to examine the **daily increase** in cases, therefore we just need to calculate the difference between case totals for consecutive days for any of the counties. 
+
+Here we create a copy of the tibble which we will group by county, and calculate the **daily change** in Cumulative Cases and Population Proportion Cases for each TimeStamp in the dataset.
+
+```{r changeThisIfError}
+corona <- arrange(corona, CountyName)
+
+corona$DailyInc <- corona$ConfirmedCovidCases - lag(corona$ConfirmedCovidCases)
+corona[is.na(corona)] =0
+
+corona$PropDailyInc <- corona$PopulationProportionCovidCases - lag(corona$PopulationProportionCovidCases)
+corona[is.na(corona)] =0
+
+corona$TimeStamp= as.Date(corona$TimeStamp)
+
+for(i in 1:length(corona$DailyInc)) {
+  if(corona$TimeStamp[i] == "2020-02-27") {
+    corona$DailyInc[i] = 0
+    corona$PropDailyInc[i] = 0
+  }
+}
+```
+
+```{r}
+
+##Splitting data by Province
+conn <- filter(corona,
+  CountyName == "Galway" |
+  CountyName == "Leitrim" |
+  CountyName == "Mayo" |
+  CountyName == "Roscommon" |
+  CountyName == "Sligo")
+
+lein <- filter(corona,
+  CountyName == "Kildare" |
+  CountyName == "Dublin" |
+  CountyName == "Carlow" |
+  CountyName == "Kilkenny" |
+  CountyName == "Laois" |
+  CountyName == "Longford" |
+  CountyName == "Louth" |
+  CountyName == "Meath" |
+  CountyName == "Offaly" |
+  CountyName == "Westmeath" |
+  CountyName == "Wexford" |
+  CountyName == "Wicklow")
+
+mun <- filter(corona,
+  CountyName == "Clare" |
+  CountyName == "Cork" |
+  CountyName == "Kerry" |
+  CountyName == "Limerick" |
+  CountyName == "Tipperary" |
+  CountyName == "Waterford")
+
+uls <- filter(corona,
+  CountyName == "Cavan" |
+  CountyName == "Donegal" |
+  CountyName == "Monaghan")
+```
+
+#### Data Preview
+
+In this section, we are showing the dataset in the form of table after the data cleaning steps has been performed .
+```{r}
+library(DT)
+datatable(tail(corona,50))
+```
+
+#### Data Description
+
+Below is the table containing the the variable names, data types and a short description.
+```{r}
+Variable.type <- lapply(corona,class)
+Variable.desc <- c("Specifies a ID for the CountyName column",
+"Name of the County in Ireland","Population of the respective county",
+"Stores Date/Time information","Position on map expressed as IGEasting relative to a false origin",
+"Position on map expressed as IGNorthing relative to a false origin","Latitude- Geographic coordinate that specifies the north–south position of a point on the Earth's surface",
+"Longitude- Geographic coordinate that specifies the east or west of the prime meridian",
+"International Geographical Union",
+"Confirmed Covid Cases w.r.t Date/Time","Proportion of the population infected with Covid",
+"Data for Shape files- Shape Area","Data for Shape files- Shape Length")
+Variable.name1 <- colnames(corona)
+data.desc <- as_data_frame(cbind(Variable.name1,Variable.type,Variable.desc))
+colnames(data.desc) <- c("Variable Name","Data Type","Variable Description")
+library(knitr)
+kable(data.desc)
+```
+
+
+### Data Analysis {.tabset}
+#### Daily Increase
+
+**Daily Increase in Case Numbers**
+
+A fact of life over the course of the pandemic in Ireland has been the daily reporting of the COVID-19 case numbers, with the number generally published being that of the **nationwide total number of cases** for that particular day. It is important to look at this variable as it is indicative of **rate** at which the cases are growing in the country. Our dataset represents the cumulative total number of cases, up until and including the given time stamp. As mentioned in the Data import section, some minor manipulation allows us to view the daily increase per day in each county.
+
+First, we graph the **total daily new cases** against time, as mentioned previously this is the figure generally reported during the pandemic. This graph is interactive and allows us to easily see exactly which days had the largest/smallest increases.
+
+A commonality between all of the graphs in this report is that we can visually see the impact of the first intial incidence of COVID-19 in March followed by the first lockdown and subsequent spike after the easing of restrictions.
+
+The peaks of the two major spikes are **April 14th** with a total new case count of **1,164** and then **October 17th** with the current record of **1,283** total new cases of COVID-19
+
+```{r dailyRateCountry}
+corona %>%
+  group_by(TimeStamp) %>%
+  summarise(totalDaily=sum(DailyInc)) %>% 
+  hchart("line",hcaes(x = TimeStamp, y = totalDaily)) %>%
+  hc_title(text = "Daily Increase in COVID-19 Cases: Nationwide") %>% 
+  hc_add_theme(hc_theme_538())
+```
+
+While the national picture is of course very important, it is interesting to break the country down by **province** and by **county** and investigate how different portions of the country are dealing with the pandemic.
+
+First we split by province - graphing the daily cases against time for each county and grouping by their respective provinces.
+
+```{r dailyRateProvince, fig.width=10, fig.height=8}
+dconn <- ggplot(data=conn, mapping=aes(x=TimeStamp, y=DailyInc, color=CountyName)) +
+  geom_line(size=0.5) +
+  labs(title="Increase in COVID-19 Cases COVID-19 Cases: Connacht") +
+  xlab("Time") +
+  ylab("Increase in COVID-19 Cases")
+
+dlein <- ggplot(data=lein, mapping=aes(x=TimeStamp, y=DailyInc, color=CountyName)) +
+  geom_line(size=0.5) +
+  labs(title="Increase in COVID-19 Cases COVID-19 Cases: Leinster") +
+  xlab("Time") +
+  ylab("Increase in COVID-19 Cases")
+
+dmun <- ggplot(data=mun, mapping=aes(x=TimeStamp, y=DailyInc, color=CountyName)) +
+  geom_line(size=0.5) +
+  labs(title="Increase in COVID-19 Cases COVID-19 Cases: Munster") +
+  xlab("Time") +
+  ylab("Increase in COVID-19 Cases")
+
+duls <- ggplot(data=uls, mapping=aes(x=TimeStamp, y=DailyInc, color=CountyName)) +
+  geom_line(size=0.5) +
+  labs(title="Daily increase in COVID-19 Cases: Ulster") +
+  xlab("Time") +
+  ylab("Increase in COVID-19 Cases")
+
+plot_grid(dconn,dlein,dmun,duls)
+```
+
+This graph does give an indication as to the relative severity of cases in each of the provinces, it is clear that **Leinster** is the worst effected in terms of raw numbers, no surprise given that it has the most populace county in **Dublin**.
+
+In order to view each of the county's rates more clearly we use **ggplot** and the *facet_wrap* function in order to graph the trend of each county at once and compare them with ease.
+
+```{r dailyFig, fig.width=10, fig.height=8}
+ggplot(data=corona, mapping=aes(x=TimeStamp, y=DailyInc, fill=CountyName)) + 
+  geom_line(size=0.5) +
+  labs(title="Daily Increase in COVID-19 Cases: By County") +
+  xlab("Time") +
+  ylab("Increas in Cases") +
+  facet_wrap(~CountyName)
+```
+
+Clearly **Dublin** is in the worst state of affairs, with the likes of **Kilkenny** and **Leitrim** seemingly lying on the opposite end of the spectrum. It is interesting to see also that **Galway** despite having the **5th** highest population in the country has had their case increases keep consistently low both through the spikes and lockdown.
+
+However as mentioned earlier, Dublin has the largest population in the country of over 1.3 million, with the second highest, Cork (please note that while *Antrim* is in fact the second highest in terms of population *geographically*, the dataset only contains data for the *Republic of Ireland* and not *Northern Ireland* which Antrim is of course a part of) having a population less than half that of Dublin at just 530k. 
+
+To better illustrate the severity of COVID-19 in each county we must look at the total cases and the rate of growth of cases as a proportion of the population. Comparing just pure number of cases between Dublin, and say *Leitrim* which has a population of just over *30,000*, is unfair as these figures do not take into account the total population of the county.
+
+To fix this issue we must analyse the **PopulationProportionCovidCases** variable, which gives us the number of cases per 100,000, that is to say, the values in this variable give the number of cases that a county would have if its population was 100,000. It is an excellent tool in this instance to more fairly compare the state of COVID-19 cases in each county.
+
+```{r propDailyFig, fig.width=10, fig.height=8}
+ggplot(data=corona, mapping=aes(x=TimeStamp, y=PropDailyInc, fill=CountyName)) + 
+  geom_line(size=0.5) +
+  labs(title="Daily Increase in COVID-19 Cases (Proportional): By County") +
+  xlab("Time") +
+  ylab("Increas in Cases") +
+  facet_wrap(~CountyName)
+```
+
+This above graph is very interesting as it shows a clearer picture of the intensity of COVID-19 cases in each county. While previously it appeared that **Dublin** was the clear "leader" in terms of cases, when the population figures are considered, Dublin is certainly on the lesser end of the spectrum. The stand out leader now is in fact **Cavan**, showing the highest *proportional* increase in cases out of all counties, with **Longford** coming at a close second.
+
+We will see later in this report that Cavan, quite remarkably given the fact that it has the **8th** smallest county population, has the highest concentration of cases with respect to it's population.
+
+
+#### Cumulative Cases
+
+**Monthly COVID-19 Confirmed Cases:**
+
+This interactive visualization has been done using highcharter library present in R. The below graph depicts the monthly COVID-19 confirmed cases.It shows the cumulative sum of the cases from 27-02-2020 till current date out of 26 counties of the Republic.
+
+```{r}
+corona %>% 
+  group_by(TimeStamp) %>% 
+  summarise(total_count = cumsum(ConfirmedCovidCases)) %>% 
+  hchart("column",hcaes(x = TimeStamp, y = total_count)) %>% 
+  hc_title(text = "Monthly COVID-19 Confirmed Cases") %>% 
+  hc_legend("Total cases:",sum(corona$ConfirmedCovidCases)) %>% 
+  hc_add_theme(hc_theme_538())
+```
+
+**Countywise COVID-19 Confirmed Cases:**
+
+The below interactive visualization has also been done using highcharter library. The below graph depicts the total cases in all the counties respectively. Baile Átha Cliath - Town of the hurdled ford (Dublin) seems to be outnumbered (Count-) followed by Cork and Kildare. Other counties like Kilkenny, Laois, Monaghan, Offaly, Roscommon, Sligo, Waterford etc. follow a same constant trend.
+
+
+```{r}
+ corona %>% 
+  group_by(CountyName) %>% 
+  summarise(total_count = max(ConfirmedCovidCases)) %>% 
+  hchart("line",hcaes(x = CountyName, y = total_count)) %>%
+  hc_title(text = "Countywise COVID-19 Confirmed Cases") %>% 
+  hc_add_theme(hc_theme_538())
+```
+
+
+**Animated visualization of Provinces: Connacht**
+
+*Note: the following visualisations were rendered on the 10/12/2020 and embedded as .gifs in order to save on rendering time when marking, the code for generating them has been included below*
+
+The below animated visualization is made using library gganimate and others dependent libraries. This graphs signifies only one specific province in Republic of Ireland: Connacht.
+The five counties in the province are: Galway, Leitrim, Mayo, Roscommon and Sligo.
+Out of these five counties, we can see from the visualization that the **Mayo** seems to be leading **Galway** at the beginning of the outbreak i.e; from March till June post which **Galway** take the lead in the number of cases post June month.
+
+```{r echo=FALSE, fig.align="center", out.height="50%"}
+image_read("connVis.gif")
+```
+
+```{r connVis, eval=FALSE}
+options(repr.plot.width = 1, repr.plot.height = 0.75)
+conncum <- ggplot(data=conn, mapping=aes(x=CountyName, y=ConfirmedCovidCases,
+                                  fill=CountyName)) +
+  geom_bar(stat = "identity") +
+  transition_time(TimeStamp)+
+  labs(title="Animated visualization of Province: Connacht", subtitle = 'Day:{frame_time}')+
+  xlab("Country Name") +
+  ylab("Cumulative COVID-19 Cases - Connacht")+
+  theme_bw()+
+  shadow_mark()
+
+anim_save("connVis.gif", conncum)
+```
+
+**Animated visualization of Province: Leinster**
+Similar to the above visualization, this animated plot of **Leinster** Province has been done using gganimate. The counties that included are Kildare,Dublin,Carlow,Kilkenny,Laois,Longford,Louth,Meath,Offaly,Westmeath,Wexford and Wicklow.
+This plot shows that Dublin City outclass other counties in Leinster province.**Kildare** and **Meath** seems to rise upto an extent of approximately 11,000.
+
+```{r echo=FALSE, fig.align="center", out.height="50%"}
+image_read("leinVis.gif")
+```
+
+
+```{r leinVis, eval=FALSE}
+options(repr.plot.width = 1, repr.plot.height = 0.75)
+leincum <- ggplot(data=lein, mapping=aes(x=CountyName, y=ConfirmedCovidCases, fill=CountyName)) +
+  geom_bar(stat = "identity") +
+  scale_x_discrete(guide = guide_axis(angle = 90))+
+  labs(title="Animated visualization of Province: Leinster", subtitle = 'Day:{frame_time}')+
+  transition_time(TimeStamp)+
+  xlab("Country Name") +
+  ylab("Cumulative COVID-19 Cases - Leinster")+
+  theme_bw()+
+  shadow_mark()
+
+anim_save("leinVis.gif", leincum)
+```
+
+**Animated visualization of Province: Munster**
+Using GGplot and gganimate as above, the munster province has been visualized. From Clare, Cork, Kerry, Limerick, Tipperary and Waterford counties, we can see that the Cork outvoted others in terms of COVID-19 cases. In the last quarter, **Clare, Limerick** and **Tipperary** shows transcend in the number of cases compared to **Kerry** and **Waterford**.
+
+```{r echo=FALSE, fig.align="center", out.height="50%"}
+image_read("munVis.gif")
+```
+
+```{r munVis, eval=FALSE}
+options(repr.plot.width = 1, repr.plot.height = 0.75)
+muncum <- ggplot(data=mun, mapping=aes(x=CountyName, y=ConfirmedCovidCases, fill=CountyName)) +
+  geom_bar(stat = "identity") +
+  transition_time(TimeStamp)+
+  labs(title="Animated visualization of Province: Munster", subtitle = 'Day:{frame_time}')+
+  xlab("Country Name") +
+  ylab("Cumulative COVID-19 Cases - Munster")+
+  theme_bw()+
+  shadow_mark()
+
+anim_save("munVis.gif", muncum)
+```
+
+**Animated visualization of Province: Ulster**
+The counties in Ulster province has been analyzed and it can be clearly seen from the machination that all the counties **Cavan, Donegal** and **Monaghan** shows a rising trend at the inception but **Donegal** and **Cavan** seems to exponentially rise from in the last quarter.
+
+```{r echo=FALSE, fig.align="center", out.height="50%"}
+image_read("ulsVis.gif")
+```
+
+```{r ulsVis, eval=FALSE}
+options(repr.plot.width = 1, repr.plot.height = 0.75)
+ulscum <- ggplot(data=uls, mapping=aes(x=CountyName, y=ConfirmedCovidCases, fill=CountyName)) +
+  geom_bar(stat = "identity") +
+  transition_time(TimeStamp)+
+  labs(title="Animated visualization of Province: Ulster", subtitle = 'Day:{frame_time}')+
+  xlab("Country Name") +
+  ylab("Cumulative COVID-19 Cases - Ulster")+
+  theme_bw()+
+  shadow_mark()
+
+anim_save("ulsVis.gif", ulscum)
+```
+
+#### Proportional Cases
+
+**Proportional Cases per County**
+
+As covered in the previous section, the **total number of cases** per county would be the first variable to observe, we plot a graph of **cumulative cases** for each county, split by province, over time.
+
+```{r cumulativeCasesGraph, fig.width=10, fig.height=8}
+pconn <- ggplot(data=conn, mapping=aes(x=TimeStamp, y=ConfirmedCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Cumulative COVID-19 Cases: Connacht") +
+  xlab("Time") +
+  ylab("Cumulative COVID-19 Cases")
+
+plein <- ggplot(data=lein, mapping=aes(x=TimeStamp, y=ConfirmedCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Cumulative COVID-19 Cases: Leinster") +
+  xlab("Time") +
+  ylab("Cumulative COVID-19 Cases")
+
+pmun <- ggplot(data=mun, mapping=aes(x=TimeStamp, y=ConfirmedCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Cumulative COVID-19 Cases: Munster") +
+  xlab("Time") +
+  ylab("Cumulative COVID-19 Cases")
+
+puls <- ggplot(data=uls, mapping=aes(x=TimeStamp, y=ConfirmedCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Cumulative COVID-19 Cases: Ulster") +
+  xlab("Time") +
+  ylab("Cumulative COVID-19 Cases")
+
+plot_grid(pconn,plein,pmun,puls)
+```
+
+Immediately we can see that **Dublin** is the clear leader in cases, rising over **20,000** with the **2nd highest** count coming from **Cork** with over **6000**. These are in fact the two most **highly populated** counties in the country, therefore it is obvious that they would have the highest **number** of cases. Dublin (as of the 2016 census) has a population of over 1 million while, for example, Cavan has a population of just **70,000**. In order to correctly compare the state of COVID-19 in each county, we should look at the **proportion** of cases rather than just raw numbers.
+
+The **PopulationProportionCovidCases** variable is exactly what we can use to illustrate this. This variable takes the cases as a **proportion of the population** and normalizes it in a manner that allows the counties to be more **fairly compared**. Like the previous set of plots, the **PopulationProportionCovidCases** value for each county is plotted against time, with the counties being grouped by province.
+
+```{r casesPer100Graph, fig.width=10, fig.height=8}
+pconn <- ggplot(data=conn, mapping=aes(x=TimeStamp, y=PopulationProportionCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Pop. Proportion COVID-19 Cases: Connacht") +
+  xlab("Time") +
+  ylab("Cases per 100,000")
+
+plein <- ggplot(data=lein, mapping=aes(x=TimeStamp, y=PopulationProportionCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Pop. Proportion COVID-19 Cases: Leinster") +
+  xlab("Time") +
+  ylab("Cases per 100,000")
+
+pmun <- ggplot(data=mun, mapping=aes(x=TimeStamp, y=PopulationProportionCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Pop. Proportion COVID-19 Cases: Munster") +
+  xlab("Time") +
+  ylab("Cases per 100,000")
+
+puls <- ggplot(data=uls, mapping=aes(x=TimeStamp, y=PopulationProportionCovidCases, color=CountyName)) +
+  geom_line(size=1) +
+  labs(title="Pop. Proportion COVID-19 Cases: Ulster") +
+  xlab("Time") +
+  ylab("Cases per 100,000")
+
+plot_grid(pconn,plein,pmun,puls)
+
+```
+
+These plots tell an entirely different story to the cumulative cases plots. Dublin and Cork, who were previously the highest charted on their respective plots are no longer at the top, instead we see that **Co. Cavan** in fact has the **highest proportion of COVID-19 cases** with respect to it's own population. As of the 16th of November 2020, if Co. Cavan was itself a **European country**, it would have the **8th highest** proportion of COVID-19 cases in the EU, lying just between France and Switzerland.
+
+***Choropleth Map***
+
+Using tmap and the facets functionality, an animated gif was generated to show graphically the progression in the proportions of COVID-19 cases in each of the counties, starting with the first incidences back in March of 2020.
+
+```{r gifImage, fig.align='center',}
+image_read("covid19cph.gif")
+```
+
+The above .gif were generated using the below code, utilizing the shape file provided by our data source along with the tmap package in order to provide animation.
+
+```{r gifCode, eval=FALSE}
+covbreak = c(seq(0,3000, by = 300))
+propmap<- tm_shape(ire) +
+  tm_fill("CPH",  title = "Cases per 100,000",
+          breaks = covbreak,
+          style = "fixed",
+          textNA = "No Data",
+          colorNA = "white",
+          palatte = "Blues") +
+  tm_text("CountyName", size = 0.75) +
+  tm_borders() +
+  tm_facets(along="TimeStamp")
+
+tmap_animation(propmap, filename="covid19cph.gif", width=600, height=600, delay=5)
+```
+
+In order to provide some interactivity and allow for easier examination of the data, below is an embeded **Shiny app** allowing you to view a the mapping of case proportions by county at any given timestamp from the data.
+
+https://paddo.shinyapps.io/COVID19_County/
+
+### Summary
+
+This project allowed us to develop a greater understanding of the current COVID-19 pandemic in Ireland. It showed a number of interesting trends and facts that would not have been visible at a cursory glance at the data. 
+
+#### Summary
+* The highest daily increase of COVID-19 cases for the entire country was **1,283** on **October 17th, 2020**
+* In terms of raw case numbers, *Dublin* was the worst effected with a total number of confirmed cases of COVID-19 being **27,666**.
+* Dublin also had the largest single day increase in cases, of **513** on the **22nd of April, 2020**
+* We can graphically see the effect of the lockdown of the country and the various restrictions that were implemented, there is a clear dip/stall in case numbers/proportions during the summer, with the period of **June to July** being the point where the increase in cases was closest to being zero.
+* We can see a clear *trend downwards* in terms of new cases, mainly due to the Level 5 restrictions which were implemented in *October* and lifted at the start of *December*.
+* Given the trends seen with the previous restrictions/lockdown, we can likely expect another spike in cases in the new year.
